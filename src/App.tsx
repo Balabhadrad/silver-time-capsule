@@ -235,6 +235,16 @@ function App() {
   const attemptedRef = useRef<Set<string>>(new Set())
 
   // When an order becomes mature, automatically prompt Passkey to withdraw
+  const orders = vault?.orders ?? []
+  const [nowMs, setNowMs] = useState(() => Date.now())
+  
+  // Update nowMs every second – used for countdowns and auto‑withdraw checks
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+  
+  // When an order becomes mature, automatically prompt Passkey to withdraw
   useEffect(() => {
     orders.forEach((order) => {
       const mature = nowMs >= new Date(order.unlockAt).getTime()
@@ -245,14 +255,12 @@ function App() {
       }
     })
   }, [orders, nowMs])
+  
   const [showModal, setShowModal] = useState(() => !localStorage.getItem('silver300.modal.ok'))
   const [showDeposit, setShowDeposit] = useState(false)
   const [qrDataUrl, setQrDataUrl] = useState('')
   const [loadingLabel, setLoadingLabel] = useState('')
-  const [nowMs, setNowMs] = useState(() => Date.now())
-  const inFlightOrderIds = useRef(new Set<string>())
-  const provider = useMemo(() => new ethers.JsonRpcProvider(RPC_URL, SEPOLIA_CHAIN_ID), [])
-  const orders = vault?.orders ?? []
+  
   const frozenBalance = useMemo(() => orders.filter((order) => order.status !== 'sent').reduce((sum, order) => sum + parseOrderEth(order.amountEth), 0n), [orders])
   const availableBalance = balance > frozenBalance ? balance - frozenBalance : 0n
   const fundingGap = frozenBalance > balance ? frozenBalance - balance : 0n
@@ -437,13 +445,7 @@ function App() {
     setVault(null)
     setBalance(0n)
     setNotice('已清空')
-  }
 
-  useEffect(() => { if (vault?.address) refreshBalance(vault.address) }, [])
-  useEffect(() => {
-    const timer = window.setInterval(() => setNowMs(Date.now()), 1000)
-    return () => window.clearInterval(timer)
-  }, [])
   useEffect(() => {
     if (!depositUri) {
       setQrDataUrl('')
