@@ -223,48 +223,26 @@ function App() {
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('欢迎回来')
 
-  // Auto‑hide toast after 2 seconds
-  useEffect(() => {
-    if (notice) {
-      const timer = setTimeout(() => setNotice(''), 2000)
-      return () => clearTimeout(timer)
-    }
-  }, [notice])
-
-  // Track orders we have already auto‑triggered for
-  const attemptedRef = useRef<Set<string>>(new Set())
-
-  // When an order becomes mature, automatically prompt Passkey to withdraw
-  const orders = vault?.orders ?? []
-  const [nowMs, setNowMs] = useState(() => Date.now())
-  
-  // Update nowMs every second – used for countdowns and auto‑withdraw checks
-  useEffect(() => {
-    const timer = setInterval(() => setNowMs(Date.now()), 1000)
-    return () => clearInterval(timer)
-  }, [])
-  
-  // When an order becomes mature, automatically prompt Passkey to withdraw
-  useEffect(() => {
-    orders.forEach((order) => {
-      const mature = nowMs >= new Date(order.unlockAt).getTime()
-      if (mature && order.status !== 'sent' && !attemptedRef.current.has(order.id)) {
-        attemptedRef.current.add(order.id)
-        // This will trigger the Passkey flow in attemptTransfer
-        attemptTransfer(order)
-      }
-    })
-  }, [orders, nowMs])
-  
   const [showModal, setShowModal] = useState(() => !localStorage.getItem('silver300.modal.ok'))
   const [showDeposit, setShowDeposit] = useState(false)
   const [qrDataUrl, setQrDataUrl] = useState('')
   const [loadingLabel, setLoadingLabel] = useState('')
-  
+  const [nowMs, setNowMs] = useState(() => Date.now())
+  const inFlightOrderIds = useRef(new Set<string>())
+  const attemptedRef = useRef<Set<string>>(new Set())
+  const provider = useMemo(() => new ethers.JsonRpcProvider(RPC_URL, SEPOLIA_CHAIN_ID), [])
+  const orders = vault?.orders ?? []
   const frozenBalance = useMemo(() => orders.filter((order) => order.status !== 'sent').reduce((sum, order) => sum + parseOrderEth(order.amountEth), 0n), [orders])
   const availableBalance = balance > frozenBalance ? balance - frozenBalance : 0n
   const fundingGap = frozenBalance > balance ? frozenBalance - balance : 0n
   const depositUri = vault ? `ethereum:${vault.address}@${SEPOLIA_CHAIN_ID}` : ''
+
+  // Auto-hide every toast after 2 seconds so it never blocks the wallet UI.
+  useEffect(() => {
+    if (!notice) return
+    const timer = window.setTimeout(() => setNotice(''), 2000)
+    return () => window.clearTimeout(timer)
+  }, [notice])
 
   function updateVault(next: SilverVault) {
     setVault(next)
@@ -445,7 +423,21 @@ function App() {
     setVault(null)
     setBalance(0n)
     setNotice('已清空')
+  }
 
+  useEffect(() => { if (vault?.address) refreshBalance(vault.address) }, [])
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+  useEffect(() => {
+    for (const order of orders) {
+      const mature = nowMs >= new Date(order.unlockAt).getTime()
+      if (order.status === 'sent' || !mature || attemptedRef.current.has(order.id)) continue
+      attemptedRef.current.add(order.id)
+      void attemptTransfer(order)
+    }
+  }, [orders, nowMs])
   useEffect(() => {
     if (!depositUri) {
       setQrDataUrl('')
@@ -517,8 +509,8 @@ function App() {
                 <div><span>时间</span><b>{new Date(order.unlockAt).toLocaleString()}</b></div>
                 <div><span>倒计时</span><b>{order.status === 'sent' ? '已完成' : countdown}</b></div>
               </div>
-              <p className="rule-line">不可撤销。到点后需要你主动验证 Passkey，再广播 Sepolia 提现交易。</p>
-              <button className="primary full" onClick={() => attemptTransfer(order)} disabled={busy || order.status === 'sent' || !mature}><Send /> {mature ? '立即执行提现' : countdown}</button>
+              <p className="rule-line">不可撤销。到点后会自动唤起 Passkey 验证，通过后广播 Sepolia 提现交易。</p>
+              <button className="primary full" onClick={() => attemptTransfer(order)} disabled={busy || order.status === 'sent' || !mature}><Send /> {mature ? '再次执行提现' : countdown}</button>
             </article>
           )
         })}
